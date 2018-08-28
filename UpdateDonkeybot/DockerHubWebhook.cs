@@ -14,8 +14,11 @@ namespace UpdateDonkeybot
     using Microsoft.Extensions.Logging;
     using CancellationToken = System.Threading.CancellationToken;
 
+    [StorageAccount("AzureWebJobsStorage")]
     public static class DockerHubWebhook
     {
+        private const string MessageQueue = "update-donkeybot-jobs";
+
         private const string ResourceGroup = "Donkeybot";
 
         private const string ContainerGroup = "donkeybot";
@@ -23,19 +26,29 @@ namespace UpdateDonkeybot
         private const string Image = "perrym5/donkeybot";
 
         [FunctionName("DockerHubWebhook")]
-        public static async Task<IActionResult> Run(
+        public static async Task<IActionResult> WebhookHandlerAsync(
             [HttpTrigger(AuthorizationLevel.Function, "get", "post", Route = null)]HttpRequest req,
+            [Queue(MessageQueue)] IAsyncCollector<string> outputQueueItem,
+            ILogger log)
+        {
+            log.LogInformation("C# HTTP trigger function processed a request.");
+
+            await outputQueueItem.AddAsync("update");
+            return new OkResult();
+        }
+
+        [FunctionName("UpdateDonkeybotJob")]
+        public static async Task QueueMessageHandlerAsync(
+            [QueueTrigger(MessageQueue)] string message,
             ILogger log,
             ExecutionContext context,
             CancellationToken token)
         {
-            log.LogInformation("C# HTTP trigger function processed a request.");
+            log.LogInformation($"C# Queue trigger function processed: {message}");
 
             var config = BuildConfig(context.FunctionAppDirectory);
             var azure = AuthenticateToAzure(config, log);
             await CreateDonkeybot(azure, log, token);
-
-            return new OkObjectResult("Output...");
         }
 
         private static async Task CreateDonkeybot(IAzure azure, ILogger log, CancellationToken token)
