@@ -1,6 +1,8 @@
 namespace UpdateDonkeybot
 {
     using System;
+    using System.Collections.Generic;
+    using System.Linq;
     using System.Threading.Tasks;
     using Microsoft.AspNetCore.Http;
     using Microsoft.AspNetCore.Mvc;
@@ -48,33 +50,40 @@ namespace UpdateDonkeybot
 
             var config = BuildConfig(context.FunctionAppDirectory);
             var azure = AuthenticateToAzure(config, log);
-            await CreateDonkeybot(azure, log, token);
-        }
-
-        private static async Task CreateDonkeybot(IAzure azure, ILogger log, CancellationToken token)
-        {
-            log.LogInformation($"Creating container group '{ContainerGroup}'...");
-
             var resourceGroup = await azure.ResourceGroups.GetByNameAsync(ResourceGroup, token);
-            var containerGroup = await azure.ContainerGroups
-                .Define(ContainerGroup)
-                .WithRegion(resourceGroup.Region)
-                .WithExistingResourceGroup(resourceGroup)
-                .WithLinux()
-                .WithPublicImageRegistryOnly()
-                .WithoutVolume()
-                .DefineContainerInstance(ContainerGroup)
-                    .WithImage(Image)
-                    .WithoutPorts()
-                    .WithCpuCoreCount(1.0)
-                    .WithMemorySizeInGB(1.0)
-                    //.WithEnvironmentVariables
-                    .Attach()
-                .WithRestartPolicy(ContainerGroupRestartPolicy.Always)
-                .CreateAsync(token);
 
-            log.LogInformation("Created container group successfully...");
+            var env = config["HUBOT_ENV_KEYS"]
+                .Split(',')
+                .ToDictionary(k => k, k => config[k]);
+
+            // Add a timestamp env var to make each deployment different enough for a restart
+            env["TIMESTAMP"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+
+            log.LogInformation("Creating container instance");
+            await azure.CreateDonkeybotInstance(env, resourceGroup, token);
+            log.LogInformation("Successfully created container instance");
         }
+
+        private static Task CreateDonkeybotInstance(
+            this IAzure azure,
+            IDictionary<string, string> env,
+            IResourceGroup group,
+            CancellationToken token) => azure.ContainerGroups
+            .Define(ContainerGroup)
+            .WithRegion(group.Region)
+            .WithExistingResourceGroup(group)
+            .WithLinux()
+            .WithPublicImageRegistryOnly()
+            .WithoutVolume()
+            .DefineContainerInstance(ContainerGroup)
+                .WithImage(Image)
+                .WithoutPorts()
+                .WithCpuCoreCount(1.0)
+                .WithMemorySizeInGB(1.0)
+                .WithEnvironmentVariables(env)
+                .Attach()
+            .WithRestartPolicy(ContainerGroupRestartPolicy.Always)
+            .CreateAsync(token);
 
         private static IAzure AuthenticateToAzure(IConfigurationRoot config, ILogger log)
         {
